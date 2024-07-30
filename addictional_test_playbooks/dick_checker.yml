@@ -1,0 +1,54 @@
+- name: Update virtual machines information in netbox
+  hosts: all
+  gather_facts: yes
+  tasks:
+    - name: Ensure ansible_facts.devices is defined
+      assert:
+        that: ansible_facts.devices is defined
+
+    - name: Filter vd* and sd* devices and extract their sizes
+      set_fact:
+        disk_sizes: >-
+          {{
+            ansible_facts.devices
+            | dict2items
+            | selectattr('key', 'match', '^vd|^sd')
+            | map(attribute='value.size')
+          }}
+
+    - name: Debug disk sizes
+      debug:
+        msg: "Disk sizes: {{ disk_sizes }}"
+
+    - name: Convert sizes to GB
+      set_fact:
+        sizes_in_gb: >-
+          {{
+            disk_sizes | map('regex_replace', 'GB$', '| float') | map('regex_replace', 'MB$', '| float * 0.001') | map('regex_replace', 'TB$', '| float * 1000')
+          }}
+
+    - name: Debug converted sizes
+      debug:
+        msg: "Converted sizes: {{ sizes_in_gb }}"
+
+    - name: Evaluate converted sizes
+      set_fact:
+        evaluated_sizes: >-
+          {{
+            sizes_in_gb | map('split', '|') | map('map', 'float') | map('sum')
+          }}
+
+    - name: Debug evaluated sizes
+      debug:
+        msg: "Evaluated sizes: {{ evaluated_sizes }}"
+
+    - name: Sum the evaluated sizes
+      set_fact:
+        total_disk_space: >-
+          {{
+            evaluated_sizes | sum | int
+          }}
+
+    - name: Print total disk space
+      debug:
+        msg: "Total disk space: {{ total_disk_space }} GB"
