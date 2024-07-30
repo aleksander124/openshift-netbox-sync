@@ -1,0 +1,8 @@
+plugin: netbox.netbox.nb_inventory
+api_endpoint: https://<netbox_url>
+token: <token>
+validate_certs: false
+config_context: false
+query_filters:
+  - role: 'openshift'
+  - tag: 'ansible_sync'

@@ -1,0 +1,162 @@
+---
+- name: Gather all disk information from virtual machines
+  block:
+    - name: Ensure ansible_facts.devices is defined
+      assert:
+        that: ansible_facts.devices is defined
+
+    - name: Filter vd* and sd* devices and extract their sizes
+      set_fact:
+        disk_sizes: >-
+          {{
+            ansible_facts.devices
+            | dict2items
+            | selectattr('key', 'match', '^vd|^sd')
+            | map(attribute='value.size')
+          }}
+
+    - name: Convert sizes to GB
+      set_fact:
+        sizes_in_gb: >-
+          {{
+            disk_sizes | map('regex_replace', 'GB$', '| float') | map('regex_replace', 'MB$', '| float * 0.001') | map('regex_replace', 'TB$', '| float * 1000')
+          }}
+
+    - name: Evaluate converted sizes
+      set_fact:
+        evaluated_sizes: >-
+          {{
+            sizes_in_gb | map('split', '|') | map('map', 'float') | map('sum')
+          }}
+
+    - name: Sum the evaluated sizes
+      set_fact:
+        total_disk_space: >-
+          {{
+            evaluated_sizes | sum | int
+          }}
+
+- name: Remove not existing virtual machines from Netbox
+  block:
+    - name: Get all virtual machines
+      kubernetes.core.k8s_info:
+        api_version: "kubevirt.io/v1"
+        kind: "VirtualMachine"
+        kubeconfig: "kubeconfig"
+      register: vm_list
+      run_once: true
+
+    - name: Set fact for vm_names from vm_list
+      set_fact:
+        openshift_vm_names: "{{ vm_list.resources | map(attribute='metadata.name') | list }}"
+      run_once: true
+
+    - name: Compare inventory hosts with OpenShift VMs
+      set_fact:
+        missing_virtual_machines: "{{ ansible_play_hosts_all | difference(openshift_vm_names) }}"
+      run_once: true
+
+    - name: Delete not existing  virtual machines from netbox
+      netbox.netbox.netbox_virtual_machine:
+        netbox_url: "{{ NETBOX_URL }}"
+        netbox_token: "{{ NETBOX_API_KEY }}"
+        validate_certs: false
+        data:
+          name: "{{ item }}"
+        state: absent
+      loop: "{{ missing_virtual_machines }}"
+      when: missing_virtual_machines | length > 0
+      run_once: true
+  delegate_to: localhost
+
+- name: Gather facts for Red Hat platforms
+  gather_facts:
+  when:
+    - hostvars[inventory_hostname].platforms is defined
+    - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
+
+- name: Print default IPv4 address and netmask for all virtual machines
+  block:
+    - name: Print default IPv4 address
+      debug:
+        msg: "IP Address: {{ ansible_facts.default_ipv4.address }}"
+
+    - name: Print default IPv4 netmask
+      debug:
+        msg: "Netmask: {{ ansible_facts.default_ipv4.netmask | netmask_to_cidr }}"
+  when:
+    - hostvars[inventory_hostname].platforms is defined
+    - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
+
+- name: Remove old temporary IP address
+  netbox.netbox.netbox_ip_address:
+    netbox_url: "{{ NETBOX_URL }}"
+    netbox_token: "{{ NETBOX_API_KEY }}"
+    validate_certs: false
+    data:
+      address: "{{ ansible_facts.default_ipv4.address }}/32"
+    state: absent
+  delegate_to: localhost
+  register: ip_address_deleted
+  ignore_errors: true
+  when:
+    - hostvars[inventory_hostname].platforms is defined
+    - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
+
+- name: Update virtual machine information in NetBox
+  netbox.netbox.netbox_virtual_machine:
+    netbox_url: "{{ NETBOX_URL }}"
+    netbox_token: "{{ NETBOX_API_KEY }}"
+    validate_certs: false
+    data:
+      name: "{{ item.metadata.name }}"
+      cluster: OpenShift
+      description: "{{ item.metadata.annotations.description | default('No description') }}"
+      tags:
+        - openshift
+        - ansible_sync
+        - "{{ item.metadata.labels.backup | default('no_backup') }}"
+        - "{{ item.metadata.labels.hadrone | default('no-hadrone-tag') }}"
+    state: present
+  loop: "{{ vm_list.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  delegate_to: localhost
+  ignore_errors: true
+  run_once: true
+
+- name: Create new IP address for virtual machine
+  block:
+    - name: Create IP address within NetBox with only required information
+      netbox.netbox.netbox_ip_address:
+        netbox_url: "{{ NETBOX_URL }}"
+        netbox_token: "{{ NETBOX_API_KEY }}"
+        validate_certs: false
+        data:
+          address: "{{ ansible_facts.default_ipv4.address }}{{ ansible_facts.default_ipv4.netmask | netmask_to_cidr }}"
+          assigned_object:
+            name: "net-0"
+            virtual_machine: "{{ inventory_hostname }}"
+          status: active
+          dns_name: "{{ inventory_hostname }}.mednet.world"
+          vrf: "global"
+          tags:
+            - openshift
+        state: new
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: Set primary ip for virtual machine
+      netbox.netbox.netbox_virtual_machine:
+        netbox_url: "{{ NETBOX_URL }}"
+        netbox_token: "{{ NETBOX_API_KEY }}"
+        validate_certs: false
+        data:
+          name: "{{ inventory_hostname }}"
+          primary_ip4: "{{ ansible_facts.default_ipv4.address }}"
+        state: present
+      delegate_to: localhost
+  when:
+    - hostvars[inventory_hostname].platforms is defined
+    - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
+    - ip_address_deleted.changed

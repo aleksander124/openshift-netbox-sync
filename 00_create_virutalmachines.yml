@@ -1,0 +1,8 @@
+---
+- name: Create virtual machines from openshift
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - shared_vars/netbox.yml
+  roles:
+    - openshift_vms_add

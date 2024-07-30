@@ -1,0 +1,2 @@
+NETBOX_URL: 'https://<netbox_url>'
+NETBOX_API_KEY: '<netbox_api_key>'
