@@ -1,0 +1,128 @@
+---
+- name: Get all virtual machine instances
+  kubernetes.core.k8s_info:
+    api_version: "kubevirt.io/v1"
+    kind: "VirtualMachineInstance"
+    kubeconfig: "kubeconfig"
+  register: vmi_list
+
+- name: Get all virtual machines
+  kubernetes.core.k8s_info:
+    api_version: "kubevirt.io/v1"
+    kind: "VirtualMachine"
+    kubeconfig: "kubeconfig"
+  register: vm_list
+
+- name: Create vm platform if not exists
+  netbox.netbox.netbox_platform:
+    netbox_url: "{{ NETBOX_URL }}"
+    netbox_token: "{{ NETBOX_API_KEY }}"
+    validate_certs: false
+    data:
+      name: "{{ item.status.guestOSInfo.prettyName | default('Undefined') }}"
+    state: present
+  loop: "{{ vmi_list.resources }}"
+  loop_control:
+    label: "{{ item.status.guestOSInfo.prettyName }}"
+  ignore_errors: true
+
+- name: Create all needed hadrone tags
+  netbox.netbox.netbox_tag:
+    netbox_url: "{{ NETBOX_URL }}"
+    netbox_token: "{{ NETBOX_API_KEY }}"
+    validate_certs: false
+    data:
+      name: "{{ item.metadata.labels.hadrone }}"
+    state: present
+  loop: "{{ vm_list.resources }}"
+  loop_control:
+    label: "{{ item.metadata.labels.hadrone }}"
+  ignore_errors: true
+  when: item.metadata.labels.hadrone is defined
+
+- name: Create virtual machine within NetBox with only required information
+  netbox.netbox.netbox_virtual_machine:
+    netbox_url: "{{ NETBOX_URL }}"
+    netbox_token: "{{ NETBOX_API_KEY }}"
+    validate_certs: false
+    data:
+      name: "{{ item.metadata.name }}"
+      cluster: OpenShift
+      tags:
+        - openshift
+        - ansible_sync
+      memory: >
+        {% if 'Gi' in item.spec.domain.resources.requests.memory %}
+        {{ (item.spec.domain.resources.requests.memory | regex_replace('Gi', '') | int) * 1024 }}
+        {% elif 'Mi' in item.spec.domain.resources.requests.memory %}
+        {{ item.spec.domain.resources.requests.memory | regex_replace('Mi', '') | int }}
+        {% else %}
+        {{ item.spec.domain.resources.requests.memory | int }}
+        {% endif %}
+      platform: "{{ item.status.guestOSInfo.prettyName }}"
+      vcpus: "{{ item.spec.domain.cpu.cores }}"
+      status: active
+      virtual_machine_role: openshift
+    state: present
+  loop: "{{ vmi_list.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: vm_created
+  ignore_errors: true
+  when: item.metadata is defined and item.spec is defined and item.status is defined
+
+- name: Configure virtual machine in netbox when created
+  block:
+    - name: Create interface within NetBox with only required information
+      netbox.netbox.netbox_vm_interface:
+        netbox_url: "{{ NETBOX_URL }}"
+        netbox_token: "{{ NETBOX_API_KEY }}"
+        validate_certs: false
+        data:
+          virtual_machine: "{{ item.metadata.name }}"
+          name: "net-0"
+          enabled: true
+          mac_address: "{{ item.spec.domain.devices.interfaces[0].macAddress }}"
+        state: present
+      loop: "{{ vmi_list.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true
+
+    - name: Create IP address within NetBox with only required information
+      netbox.netbox.netbox_ip_address:
+        netbox_url: "{{ NETBOX_URL }}"
+        netbox_token: "{{ NETBOX_API_KEY }}"
+        validate_certs: false
+        data:
+          address: "{{ item.status.interfaces[0].ipAddress }}/32"
+          assigned_object:
+            name: "net-0"
+            virtual_machine: "{{ item.metadata.name }}"
+          status: active
+          dns_name: "{{ item.metadata.name }}.mednet.world"
+          vrf: "global"
+          tags:
+            - openshift
+        state: present
+      loop: "{{ vmi_list.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true
+
+    - name: Set primary ip for virtual machine
+      netbox.netbox.netbox_virtual_machine:
+        netbox_url: "{{ NETBOX_URL }}"
+        netbox_token: "{{ NETBOX_API_KEY }}"
+        validate_certs: false
+        data:
+          name: "{{ item.metadata.name }}"
+          primary_ip4: "{{ item.status.interfaces[0].ipAddress }}"
+        state: present
+      loop: "{{ vmi_list.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true
+  when: >
+    vm_created is defined and
+    vm_created.results | selectattr('changed', 'equalto', true) | list | length > 0
