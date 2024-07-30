@@ -1,0 +1,7 @@
+- name: Update virtual machines information in netbox
+  hosts: all
+  gather_facts: yes
+  vars_files:
+    - shared_vars/netbox.yml
+  roles:
+    - openshift_vms_update_info
