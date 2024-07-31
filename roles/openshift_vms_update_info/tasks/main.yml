@@ -75,18 +75,18 @@
     - hostvars[inventory_hostname].platforms is defined
     - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
 
-- name: Print default IPv4 address and netmask for all virtual machines
-  block:
-    - name: Print default IPv4 address
-      debug:
-        msg: "IP Address: {{ ansible_facts.default_ipv4.address }}"
-
-    - name: Print default IPv4 netmask
-      debug:
-        msg: "Netmask: {{ ansible_facts.default_ipv4.netmask | netmask_to_cidr }}"
-  when:
-    - hostvars[inventory_hostname].platforms is defined
-    - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
+#- name: Print default IPv4 address and netmask for all virtual machines
+#  block:
+#    - name: Print default IPv4 address
+#      debug:
+#        msg: "IP Address: {{ ansible_facts.default_ipv4.address }}"
+#
+#    - name: Print default IPv4 netmask
+#      debug:
+#        msg: "Netmask: {{ ansible_facts.default_ipv4.netmask | netmask_to_cidr }}"
+#  when:
+#    - hostvars[inventory_hostname].platforms is defined
+#    - "{{ hostvars[inventory_hostname].platforms | select('match', '^oracle-linux.*|^red-hat.*') | list }}"
 
 - name: Remove old temporary IP address
   netbox.netbox.netbox_ip_address:
@@ -116,7 +116,6 @@
         - openshift
         - ansible_sync
         - "{{ item.metadata.labels.backup | default('no_backup') }}"
-        - "{{ item.metadata.labels.hadrone | default('no-hadrone-tag') }}"
     state: present
   loop: "{{ vm_list.resources }}"
   loop_control:
