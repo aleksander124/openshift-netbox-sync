@@ -112,6 +112,7 @@
       name: "{{ item.metadata.name }}"
       cluster: OpenShift
       description: "{{ item.metadata.annotations.description | default('No description') }}"
+      status: "{{ 'active' if item.spec.running else 'offline' }}"
       tags:
         - openshift
         - ansible_sync
