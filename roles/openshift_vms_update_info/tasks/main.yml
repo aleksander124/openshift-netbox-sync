@@ -112,7 +112,6 @@
       name: "{{ item.metadata.name }}"
       cluster: OpenShift
       description: "{{ item.metadata.annotations.description | default('No description') }}"
-      disk: "{{ total_disk_space }}"
       status: "{{ 'active' if item.spec.running else 'offline' }}"
       tags:
         - openshift
@@ -125,6 +124,17 @@
   delegate_to: localhost
   ignore_errors: true
   run_once: true
+
+- name: Update disk space
+  netbox.netbox.netbox_virtual_machine:
+    netbox_url: "{{ NETBOX_URL }}"
+    netbox_token: "{{ NETBOX_API_KEY }}"
+    validate_certs: false
+    data:
+      name: "{{ inventory_hostname }}"
+      disk: "{{ total_disk_space }}"
+    state: present
+  delegate_to: localhost
 
 - name: Create new IP address for virtual machine
   block:
